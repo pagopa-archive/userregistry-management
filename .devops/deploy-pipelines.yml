@@ -35,10 +35,6 @@ variables:
   imageRepository: '$(K8S_IMAGE_REPOSITORY_NAME)'
   deployNamespace: '$(DEPLOY_NAMESPACE)'
 
-  # App configuration
-  postgresSchema: '$(POSTGRES_SCHEMA)'
-  storageType: 'BlobStorage'
-
   ${{ if eq(parameters['environment'], 'dev') }}:
     environment: 'DEV'
     dockerRegistryServiceConnection: '$(DEV_CONTAINER_REGISTRY_SERVICE_CONN)'
@@ -48,8 +44,6 @@ variables:
 
     # App configuration
     replicas: $(DEV_REPLICAS)
-    storageContainer: '$(DEV_STORAGE_CONTAINER)'
-    storageEndpoint: '$(DEV_STORAGE_ENDPOINT)'
 
   ${{ if eq(parameters['environment'], 'uat') }}:
     environment: 'UAT'
@@ -60,8 +54,6 @@ variables:
 
     # App configuration
     replicas: $(UAT_REPLICAS)
-    storageContainer: '$(UAT_STORAGE_CONTAINER)'
-    storageEndpoint: '$(UAT_STORAGE_ENDPOINT)'
 
   ${{ if eq(parameters['environment'], 'prod') }}:
     environment: 'PROD'
@@ -72,8 +64,6 @@ variables:
 
     # App configuration
     replicas: $(PROD_REPLICAS)
-    storageContainer: '$(PROD_STORAGE_CONTAINER)'
-    storageEndpoint: '$(PROD_STORAGE_ENDPOINT)'
 
 # docker build -t container_tag --build-arg MYAPP_IMAGE=localimage:latest .
 
@@ -157,10 +147,6 @@ stages:
                       replicas:$(replicas)
                       containerRegistry:$(containerRegistry)
                       imageRepository:$(imageRepository)
-                      storageType:$(storageType)
-                      storageContainer:$(storageContainer)
-                      storageEndpoint:$(storageEndpoint)
-                      postgresSchema:$(postgresSchema)
                 - task: PublishPipelineArtifact@1
                   displayName: 'Publish Artifact baked manifests'
                   condition: ${{ parameters.publishBakedManifests }}
