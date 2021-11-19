@@ -1,0 +1,10 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: uservice-party-management
+spec:
+  type: ClusterIP
+  ports:
+    - port: 8088
+  selector:
+    app: uservice-party-management

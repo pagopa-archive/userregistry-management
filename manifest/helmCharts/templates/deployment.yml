@@ -1,0 +1,110 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  labels:
+    app: uservice-party-management
+  name: uservice-party-management
+spec:
+  replicas: {{ .Values.replicas }}
+  selector:
+    matchLabels:
+      app: uservice-party-management
+  template:
+    metadata:
+      labels:
+        app: uservice-party-management
+    spec:
+      imagePullSecrets:
+        - name: regcred
+      containers:
+        - name: uservice-party-management
+          image: {{ .Values.containerRegistry }}/{{ .Values.imageRepository }}
+          command: ["bin/pdnd-interop-uservice-party-management"]
+          args: ["-Dconfig.override_with_env_vars=true"]
+          imagePullPolicy: Always
+          readinessProbe:
+            httpGet:
+              path: /ready
+              port: management
+            periodSeconds: 10
+            failureThreshold: 5
+            initialDelaySeconds: 30
+          livenessProbe:
+            httpGet:
+              path: "/alive"
+              port: management
+            periodSeconds: 10
+            failureThreshold: 5
+            initialDelaySeconds: 30
+          ports:
+            - name: management
+              containerPort: 8558
+              protocol: TCP
+            - name: http
+              containerPort: 8088
+              protocol: TCP
+            - name: monitoring
+              containerPort: 9095
+              protocol: TCP
+          securityContext:
+            runAsUser: 1001
+            allowPrivilegeEscalation: false
+          envFrom:
+            - secretRef:
+                name: application-insights
+          env:
+            - name: JAVA_OPTS
+              value: -javaagent:/applicationinsights-agent.jar
+            - name: APPLICATIONINSIGHTS_ROLE_NAME
+              value: uservice-party-management
+            - name: APPLICATIONINSIGHTS_INSTRUMENTATION_LOGGING_LEVEL
+              value: OFF
+            - name: POSTGRES_HOST
+              valueFrom:
+                secretKeyRef:
+                  name: postgres
+                  key: POSTGRES_HOST
+            - name: POSTGRES_PORT
+              valueFrom:
+                secretKeyRef:
+                  name: postgres
+                  key: POSTGRES_PORT
+            - name: POSTGRES_DB
+              valueFrom:
+                secretKeyRef:
+                  name: postgres
+                  key: POSTGRES_DB
+            - name: POSTGRES_SCHEMA
+              value: {{ .Values.postgresSchema }}
+            - name: POSTGRES_USR
+              valueFrom:
+                secretKeyRef:
+                  name: postgres
+                  key: POSTGRES_USR
+            - name: POSTGRES_PSW
+              valueFrom:
+                secretKeyRef:
+                  name: postgres
+                  key: POSTGRES_PSW
+            - name: STORAGE_TYPE
+              value: {{ .Values.storageType }}
+            - name: STORAGE_CONTAINER
+              value: {{ .Values.storageContainer }}
+            - name: STORAGE_ENDPOINT
+              value: {{ .Values.storageEndpoint }}
+            - name: STORAGE_APPLICATION_ID
+              valueFrom:
+                secretKeyRef:
+                  name: storage
+                  key: STORAGE_USR
+            - name: STORAGE_APPLICATION_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: storage
+                  key: STORAGE_PSW
+            - name: NAMESPACE
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.namespace
+            - name: REQUIRED_CONTACT_POINT_NR
+              value: "1"

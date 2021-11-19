@@ -1,0 +1,181 @@
+# Deploy to Azure Kubernetes Service
+# Build and push image to Azure Container Registry; Deploy to Azure Kubernetes Service
+# https://docs.microsoft.com/azure/devops/pipelines/languages/docker
+
+trigger: none
+pr: none
+
+resources:
+  - repo: self
+
+parameters:
+  - name: environment
+    displayName: Target Environment
+    type: string
+    values:
+      - dev
+      - uat
+      - prod
+  - name: version
+    displayName: docker image version form https://github.com/orgs/pagopa/packages/container/package/pdnd-interop-uservice-party-management
+    type: string
+  - name: publishBakedManifests
+    displayName: Publish Baked Manifests
+    type: boolean
+    default: false
+
+variables:
+  dockerfileRelativePath: '$(DOCKERFILE)' # Dockerfile
+
+  # Agent VM image name for Build
+
+  vmImageNameDefault: 'ubuntu-latest'
+
+  # Image Repository Name
+  imageRepository: '$(K8S_IMAGE_REPOSITORY_NAME)'
+  deployNamespace: '$(DEPLOY_NAMESPACE)'
+
+  # App configuration
+  postgresSchema: '$(POSTGRES_SCHEMA)'
+  storageType: 'BlobStorage'
+
+  ${{ if eq(parameters['environment'], 'dev') }}:
+    environment: 'DEV'
+    dockerRegistryServiceConnection: '$(DEV_CONTAINER_REGISTRY_SERVICE_CONN)'
+    kubernetesServiceConnection: '$(DEV_KUBERNETES_SERVICE_CONN)'
+    containerRegistry: '$(DEV_CONTAINER_REGISTRY_NAME)'
+    selfHostedAgentPool: $(DEV_AGENT_POOL)
+
+    # App configuration
+    replicas: $(DEV_REPLICAS)
+    storageContainer: '$(DEV_STORAGE_CONTAINER)'
+    storageEndpoint: '$(DEV_STORAGE_ENDPOINT)'
+
+  ${{ if eq(parameters['environment'], 'uat') }}:
+    environment: 'UAT'
+    dockerRegistryServiceConnection: '$(UAT_CONTAINER_REGISTRY_SERVICE_CONN)'
+    kubernetesServiceConnection: '$(UAT_KUBERNETES_SERVICE_CONN)'
+    containerRegistry: '$(UAT_CONTAINER_REGISTRY_NAME)'
+    selfHostedAgentPool: $(UAT_AGENT_POOL)
+
+    # App configuration
+    replicas: $(UAT_REPLICAS)
+    storageContainer: '$(UAT_STORAGE_CONTAINER)'
+    storageEndpoint: '$(UAT_STORAGE_ENDPOINT)'
+
+  ${{ if eq(parameters['environment'], 'prod') }}:
+    environment: 'PROD'
+    dockerRegistryServiceConnection: '$(PROD_CONTAINER_REGISTRY_SERVICE_CONN)'
+    kubernetesServiceConnection: '$(PROD_KUBERNETES_SERVICE_CONN)'
+    containerRegistry: '$(PROD_CONTAINER_REGISTRY_NAME)'
+    selfHostedAgentPool: $(PROD_AGENT_POOL)
+
+    # App configuration
+    replicas: $(PROD_REPLICAS)
+    storageContainer: '$(PROD_STORAGE_CONTAINER)'
+    storageEndpoint: '$(PROD_STORAGE_ENDPOINT)'
+
+# docker build -t container_tag --build-arg MYAPP_IMAGE=localimage:latest .
+
+stages:
+  - stage: 'Build'
+    displayName: 'Build_and_Pusblih_to_${{ variables.environment }}'
+    jobs:
+      - job: Build
+        displayName: Build
+        pool:
+          vmImage: $(vmImageNameDefault)
+        steps:
+          - task: Docker@2
+            displayName: 'Build_image'
+            condition: succeeded()
+            inputs:
+              containerRegistry: '$(COMMON_CONTAINER_REGISTRY_SERVICE_CONN)'
+              repository: '$(imageRepository)'
+              command: 'Build'
+              Dockerfile: '$(Build.Repository.LocalPath)/$(dockerfileRelativePath)'
+              buildContext: '$(Build.Repository.LocalPath)'
+              arguments: --build-arg APP_IMAGE=$(DOCKER_BASE_IMAGE_NAME):${{ parameters.version }}
+              tags: |
+                $(Build.BuildId)
+                latest
+                ${{ parameters.version }}
+          - script: |
+              docker tag '$(COMMON_CONTAINER_REGISTRY_NAME)/$(imageRepository):latest' '$(containerRegistry)/$(imageRepository):latest'
+              docker tag '$(COMMON_CONTAINER_REGISTRY_NAME)/$(imageRepository):$(Build.BuildId)' '$(containerRegistry)/$(imageRepository):$(Build.BuildId)'
+              docker tag '$(COMMON_CONTAINER_REGISTRY_NAME)/$(imageRepository):${{ parameters.version }}' '$(containerRegistry)/$(imageRepository):${{ parameters.version }}'
+            displayName: 'Tag_image'
+          - task: Docker@2
+            displayName: 'Publish_image_to_${{ variables.environment }}'
+            condition: succeeded()
+            inputs:
+              containerRegistry: '$(dockerRegistryServiceConnection)'
+              repository: '$(imageRepository)'
+              command: 'push'
+              Dockerfile: '$(Build.Repository.LocalPath)/$(dockerfileRelativePath)'
+              buildContext: '$(Build.Repository.LocalPath)'
+              tags: |
+                $(Build.BuildId)
+                latest
+                ${{ parameters.version }}
+          - task: PublishPipelineArtifact@1
+            displayName: 'Publish Artifact manifests'
+            inputs:
+              targetPath: '$(Build.Repository.LocalPath)/manifest'
+              artifact: 'manifests'
+              publishLocation: 'pipeline'
+
+  - stage: 'Deploy'
+    displayName: 'Deploy_to_${{ variables.environment }}'
+    dependsOn: ['Build']
+    condition: succeeded()
+    jobs:
+      - deployment: 'Deploy_to_${{ variables.environment }}'
+        displayName: 'Deploy_to_${{ variables.environment }}'
+        pool:
+          name: $(selfHostedAgentPool)
+        environment: '$(environment)'
+        strategy:
+          runOnce:
+            deploy:
+              steps:
+                - download: none
+                - task: DownloadPipelineArtifact@2
+                  inputs:
+                    buildType: 'current'
+                    artifactName: 'manifests'
+                    targetPath: '$(Pipeline.Workspace)/manifests'
+                - task: KubernetesManifest@0
+                  name: bake
+                  displayName: Bake K8s manifests from Helm chart
+                  inputs:
+                    namespace: '$(deployNamespace)'
+                    action: bake
+                    renderType: helm2
+                    helmChart: '$(Pipeline.Workspace)/manifests/helmCharts/'
+                    overrides: |
+                      replicas:$(replicas)
+                      containerRegistry:$(containerRegistry)
+                      imageRepository:$(imageRepository)
+                      storageType:$(storageType)
+                      storageContainer:$(storageContainer)
+                      storageEndpoint:$(storageEndpoint)
+                      postgresSchema:$(postgresSchema)
+                - task: PublishPipelineArtifact@1
+                  displayName: 'Publish Artifact baked manifests'
+                  condition: ${{ parameters.publishBakedManifests }}
+                  inputs:
+                    targetPath: $(bake.manifestsBundle)
+                    artifact: 'baked'
+                    publishLocation: 'pipeline'
+                - task: KubernetesManifest@0
+                  displayName: Deploy to Kubernetes cluster
+                  inputs:
+                    action: deploy
+                    rolloutStatusTimeout: 120
+                    kubernetesServiceConnection: ${{ variables.kubernetesServiceConnection }}
+                    namespace: '$(deployNamespace)'
+                    manifests: |
+                      $(bake.manifestsBundle)
+                      $(Pipeline.Workspace)/manifests/service.yml
+                    containers: '$(containerRegistry)/$(imageRepository):${{ parameters.version }}'
