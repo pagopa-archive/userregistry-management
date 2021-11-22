@@ -2,22 +2,23 @@ apiVersion: apps/v1
 kind: Deployment
 metadata:
   labels:
-    app: uservice-party-management
-  name: uservice-party-management
+    app: pdnd-interop-uservice-party-management
+  name: pdnd-interop-uservice-party-management
 spec:
   replicas: {{ .Values.replicas }}
   selector:
     matchLabels:
-      app: uservice-party-management
+      app: pdnd-interop-uservice-party-management
   template:
     metadata:
       labels:
-        app: uservice-party-management
+        app: pdnd-interop-uservice-party-management
+        actorSystemName: pdnd-interop-uservice-party-management
     spec:
       imagePullSecrets:
         - name: regcred
       containers:
-        - name: uservice-party-management
+        - name: pdnd-interop-uservice-party-management
           image: {{ .Values.containerRegistry }}/{{ .Values.imageRepository }}
           command: ["bin/pdnd-interop-uservice-party-management"]
           args: ["-Dconfig.override_with_env_vars=true"]
