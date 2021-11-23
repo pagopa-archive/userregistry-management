@@ -17,12 +17,8 @@ parameters:
       - uat
       - prod
   - name: version
-    displayName: docker image version form https://github.com/orgs/pagopa/packages/container/package/pdnd-interop-uservice-party-management
+    displayName: docker image version form https://github.com/pagopa/pdnd-interop-uservice-user-registry-management/pkgs/container/pdnd-interop-uservice-user-registry-management
     type: string
-  - name: publishBakedManifests
-    displayName: Publish Baked Manifests
-    type: boolean
-    default: false
 
 variables:
   dockerfileRelativePath: '$(DOCKERFILE)' # Dockerfile
@@ -32,40 +28,37 @@ variables:
   vmImageNameDefault: 'ubuntu-latest'
 
   # Image Repository Name
-  imageRepository: '$(K8S_IMAGE_REPOSITORY_NAME)'
-  deployNamespace: '$(DEPLOY_NAMESPACE)'
+  imageRepository: '$(IMAGE_REPOSITORY_NAME)'
 
   ${{ if eq(parameters['environment'], 'dev') }}:
     environment: 'DEV'
     dockerRegistryServiceConnection: '$(DEV_CONTAINER_REGISTRY_SERVICE_CONN)'
-    kubernetesServiceConnection: '$(DEV_KUBERNETES_SERVICE_CONN)'
+    AZURE_SUBSCRIPTION: '$(DEV_AZURE_SUBSCRIPTION)'
     containerRegistry: '$(DEV_CONTAINER_REGISTRY_NAME)'
     selfHostedAgentPool: $(DEV_AGENT_POOL)
-
-    # App configuration
-    replicas: $(DEV_REPLICAS)
+    DEPLOY_TYPE: $[variables['DEV_DEPLOY_TYPE']]
+    WEB_APP_NAME: $(DEV_WEB_APP_NAME)
+    WEB_APP_RESOURCE_GROUP_NAME: $(DEV_WEB_APP_RESOURCE_GROUP_NAME)
 
   ${{ if eq(parameters['environment'], 'uat') }}:
     environment: 'UAT'
     dockerRegistryServiceConnection: '$(UAT_CONTAINER_REGISTRY_SERVICE_CONN)'
-    kubernetesServiceConnection: '$(UAT_KUBERNETES_SERVICE_CONN)'
+    AZURE_SUBSCRIPTION: '$(UAT_AZURE_SUBSCRIPTION)'
     containerRegistry: '$(UAT_CONTAINER_REGISTRY_NAME)'
     selfHostedAgentPool: $(UAT_AGENT_POOL)
-
-    # App configuration
-    replicas: $(UAT_REPLICAS)
+    DEPLOY_TYPE: $[variables['UAT_DEPLOY_TYPE']]
+    WEB_APP_NAME: $(UAT_WEB_APP_NAME)
+    WEB_APP_RESOURCE_GROUP_NAME: $(UAT_WEB_APP_RESOURCE_GROUP_NAME)
 
   ${{ if eq(parameters['environment'], 'prod') }}:
     environment: 'PROD'
     dockerRegistryServiceConnection: '$(PROD_CONTAINER_REGISTRY_SERVICE_CONN)'
-    kubernetesServiceConnection: '$(PROD_KUBERNETES_SERVICE_CONN)'
+    AZURE_SUBSCRIPTION: '$(PROD_AZURE_SUBSCRIPTION)'
     containerRegistry: '$(PROD_CONTAINER_REGISTRY_NAME)'
     selfHostedAgentPool: $(PROD_AGENT_POOL)
-
-    # App configuration
-    replicas: $(PROD_REPLICAS)
-
-# docker build -t container_tag --build-arg MYAPP_IMAGE=localimage:latest .
+    DEPLOY_TYPE: $[variables['PROD_DEPLOY_TYPE']]
+    WEB_APP_NAME: $(PROD_WEB_APP_NAME)
+    WEB_APP_RESOURCE_GROUP_NAME: $(PROD_WEB_APP_RESOURCE_GROUP_NAME)
 
 stages:
   - stage: 'Build'
@@ -108,12 +101,6 @@ stages:
                 $(Build.BuildId)
                 latest
                 ${{ parameters.version }}
-          - task: PublishPipelineArtifact@1
-            displayName: 'Publish Artifact manifests'
-            inputs:
-              targetPath: '$(Build.Repository.LocalPath)/manifest'
-              artifact: 'manifests'
-              publishLocation: 'pipeline'
 
   - stage: 'Deploy'
     displayName: 'Deploy_to_${{ variables.environment }}'
@@ -121,7 +108,8 @@ stages:
     condition: succeeded()
     jobs:
       - deployment: 'Deploy_to_${{ variables.environment }}'
-        displayName: 'Deploy_to_${{ variables.environment }}'
+        condition: eq(variables.DEPLOY_TYPE, 'staging_slot_and_swap')
+        displayName: 'Deploy_to_${{ variables.environment }}_staging_slot_and_swap'
         pool:
           name: $(selfHostedAgentPool)
         environment: '$(environment)'
@@ -130,38 +118,57 @@ stages:
             deploy:
               steps:
                 - download: none
-                - task: DownloadPipelineArtifact@2
+
+                # Deploy to staging slot
+                - task: AzureWebAppContainer@1
                   inputs:
-                    buildType: 'current'
-                    artifactName: 'manifests'
-                    targetPath: '$(Pipeline.Workspace)/manifests'
-                - task: KubernetesManifest@0
-                  name: bake
-                  displayName: Bake K8s manifests from Helm chart
+                    azureSubscription: '$(AZURE_SUBSCRIPTION)'
+                    resourceGroupName: '$(WEB_APP_RESOURCE_GROUP_NAME)'
+                    appType: 'webApp'
+                    appName: '$(WEB_APP_NAME)'
+                    imageName: '$(containerRegistry)/$(imageRepository):${{ parameters.version }}'
+                    deploymentMethod: 'auto'
+                    deployToSlotOrASE: true
+                    slotName: 'staging'
+                  displayName: 'Deploy to staging slot'
+
+                # Check that the staging instance is healthy
+                - script: |
+                    # fails if response status is not 2xx
+                    curl -f 'https://${{ app.Value.appname }}-staging.azurewebsites.net/$(HEALTHCHECK_PATH)'
+                  displayName: 'Healthcheck'
+
+                # Swap with production slot
+                - task: AzureAppServiceManage@0
                   inputs:
-                    namespace: '$(deployNamespace)'
-                    action: bake
-                    renderType: helm2
-                    helmChart: '$(Pipeline.Workspace)/manifests/helmCharts/'
-                    overrides: |
-                      replicas:$(replicas)
-                      containerRegistry:$(containerRegistry)
-                      imageRepository:$(imageRepository)
-                - task: PublishPipelineArtifact@1
-                  displayName: 'Publish Artifact baked manifests'
-                  condition: ${{ parameters.publishBakedManifests }}
+                    azureSubscription: '$(AZURE_SUBSCRIPTION)'
+                    resourceGroupName: '$(WEB_APP_RESOURCE_GROUP_NAME)'
+                    webAppName: '$(WEB_APP_NAME)'
+                    sourceSlot: 'staging'
+                    swapWithProduction: true
+                  displayName: 'Swap with production slot'
+
+      - deployment: 'Deploy_to_${{ variables.environment }}'
+        condition: eq(variables.DEPLOY_TYPE, 'production_slot')
+        displayName: 'Deploy_to_${{ variables.environment }}_production_slot'
+        pool:
+          name: $(selfHostedAgentPool)
+        environment: '$(environment)'
+        strategy:
+          runOnce:
+            deploy:
+              steps:
+                - download: none
+
+                # Deploy to production slot
+                - task: AzureWebAppContainer@1
                   inputs:
-                    targetPath: $(bake.manifestsBundle)
-                    artifact: 'baked'
-                    publishLocation: 'pipeline'
-                - task: KubernetesManifest@0
-                  displayName: Deploy to Kubernetes cluster
-                  inputs:
-                    action: deploy
-                    rolloutStatusTimeout: 120
-                    kubernetesServiceConnection: ${{ variables.kubernetesServiceConnection }}
-                    namespace: '$(deployNamespace)'
-                    manifests: |
-                      $(bake.manifestsBundle)
-                      $(Pipeline.Workspace)/manifests/service.yml
-                    containers: '$(containerRegistry)/$(imageRepository):${{ parameters.version }}'
+                    azureSubscription: '$(AZURE_SUBSCRIPTION)'
+                    resourceGroupName: '$(WEB_APP_RESOURCE_GROUP_NAME)'
+                    webAppName: '$(WEB_APP_NAME)'
+                    imageName: '$(containerRegistry)/$(imageRepository):${{ parameters.version }}'
+                    appType: 'webApp'
+                    slotName: 'production'
+                    deployToSlotOrASE: true
+                    deploymentMethod: 'auto'
+                  displayName: 'Deploy to production slot'
