@@ -1,1 +1,1 @@
-# selfcare-uservice-party-management
+# userregistry-management
