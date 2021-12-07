@@ -15,6 +15,7 @@ spec:
     - http:
         paths:
           - path: /(user-registry-management)/v1/(.*)
+            pathType: Prefix
             backend:
               service:
                 name: pdnd-interop-uservice-user-registry-management
