@@ -9,8 +9,7 @@ metadata:
   namespace: {{ .Release.Namespace }}
 spec:
   rules:
-    - host: usrreg-d-aks-192f1515.hcp.northeurope.azmk8s.io
-      http:
+    - http:
         paths:
           - path: /users
             pathType: Prefix
