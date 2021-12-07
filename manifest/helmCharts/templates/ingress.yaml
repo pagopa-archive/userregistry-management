@@ -1,0 +1,18 @@
+---
+apiVersion: networking.k8s.io/v1beta1
+kind: Ingress
+metadata:
+  annotations:
+    kubernetes.io/ingress.class: nginx
+    nginx.ingress.kubernetes.io/force-ssl-redirect: "true"
+  name: pdnd-interop-uservice-user-registry-management
+  namespace: {{ .Release.Namespace }}
+spec:
+  rules:
+    - host: usrreg-d-aks-192f1515.hcp.northeurope.azmk8s.io
+      http:
+        paths:
+          - path: /users
+            backend:
+              serviceName: pdnd-interop-uservice-user-registry-management
+              servicePort: 8088
